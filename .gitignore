@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+.DS_Store
+
+# generated thumbnails (Method B)
+public/products/thumbs/
+
+# optional local venv
+.venv/
+venv/

@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: ablecarry-tryon
+    runtime: python
+    plan: starter
+    region: oregon
+
+    buildCommand: pip install -r requirements.txt && python tools/make_thumbs.py
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+
+    healthCheckPath: /healthz
+    autoDeploy: true
+
+    envVars:
+      - key: RUNNINGHUB_API_KEY
+        sync: false
+
+      - key: RUNNINGHUB_WORKFLOW_ID
+        value: "2013526875070533634"
+
+      - key: RUNNINGHUB_USER_NODE_ID
+        value: "97"
+      - key: RUNNINGHUB_USER_FIELD_NAME
+        value: "data"
+
+      - key: RUNNINGHUB_SWITCH_NODE_ID
+        value: "101"
+      - key: RUNNINGHUB_SWITCH_FIELD_NAME
+        value: "Path"
+
+      - key: RUNNINGHUB_PROMPT_NODE_ID
+        value: "86"
+      - key: RUNNINGHUB_PROMPT_FIELD_NAME
+        value: "text"
+
+      - key: RUNNINGHUB_SEED_NODE_ID
+        value: "50"
+      - key: RUNNINGHUB_SEED_FIELD_NAME
+        value: "seed"

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Able Carry Try-On</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #050505; color: #f5f5f5; display: flex; justify-content: center; min-height: 100vh; }
+    .wrapper { width: 100%; max-width: 980px; padding: 24px 16px 40px; }
+    h1 { margin: 0 0 8px; font-size: 1.8rem; }
+    .subtitle { margin: 0 0 18px; color: #a0a0a0; line-height: 1.35; }
+
+    .card { background: #101010; border-radius: 12px; border: 1px solid #262626; padding: 16px 18px 20px; margin-bottom: 20px; }
+    label { display:block; margin: 10px 0 8px; font-size: 0.95rem; color: #e0e0e0; }
+
+    input[type="file"], input[type="number"] {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #333;
+      background: #181818;
+      color: #fff;
+      font-size: 0.95rem;
+    }
+
+    button {
+      margin-top: 12px;
+      padding: 10px 18px;
+      border-radius: 999px;
+      border: none;
+      background: #4f46e5;
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 0.98rem;
+    }
+    button:disabled { opacity: .5; cursor: default; }
+
+    .status { margin-top: 10px; font-size: .9rem; color: #bbb; min-height: 1.2em; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 6px; }
+    .opt {
+      border: 1px solid #2b2b2b;
+      border-radius: 14px;
+      background: #0c0c0c;
+      cursor:pointer;
+      overflow: hidden;
+      transition: transform 120ms ease, border-color 120ms ease, outline-color 120ms ease;
+    }
+    .opt:hover { transform: translateY(-1px); }
+    .opt.selected { outline: 2px solid #4f46e5; border-color: #4f46e5; }
+
+    .opt img {
+      width: 100%;
+      height: 160px;
+      object-fit: cover;
+      display: block;
+      background: #0b0b0b;
+    }
+    .opt-body { padding: 12px 12px 14px; }
+    .opt-title { font-weight: 800; font-size: 1.02rem; }
+    .opt-sub { color:#9a9a9a; margin-top: 6px; font-size: 0.88rem; }
+
+    .preview {
+      max-width: 100%;
+      max-height: 560px;
+      border-radius: 12px;
+      border: 1px solid #333;
+      display:none;
+      margin-top: 12px;
+      background:#0b0b0b;
+    }
+
+    .inline { display:flex; align-items:center; gap:10px; margin-top: 10px; color:#e0e0e0; }
+    .inline input { width: 16px; height: 16px; }
+    .hint { color:#7a7a7a; font-size:0.85rem; margin-top:6px; line-height:1.35; }
+    code { background:#0b0b0b; border:1px solid #222; padding:2px 6px; border-radius:8px; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <h1>Able Carry Try-On</h1>
+    <div class="subtitle">
+      Choose a backpack option (maps to workflow <code>Switch Path</code>), upload your photo, then generate.
+      <br/>Prompt is fixed (users can’t edit).
+    </div>
+
+    <div class="card">
+      <form id="form">
+        <label>1) Choose backpack</label>
+        <div class="grid" id="grid"></div>
+
+        <label>2) Upload your photo</label>
+        <input id="userImage" type="file" accept="image/*" />
+        <div class="hint">Best: clear shoulders visible, not too dark, simple background.</div>
+
+        <label>Seed</label>
+        <input id="seed" type="number" min="0" max="2147483647" step="1" />
+        <div class="inline">
+          <input id="fixedSeed" type="checkbox" />
+          <span>Use fixed seed (repeatable)</span>
+        </div>
+        <div class="hint">Seed must be within <code>0 … 2147483647</code>.</div>
+
+        <button id="btn" type="submit">Generate</button>
+        <div class="status" id="status"></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <label>Output</label>
+      <img id="out" class="preview" />
+      <div class="status" id="outStatus">No image generated yet.</div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      // NOTE: thumbs are auto-generated during Render build
+      const PRODUCTS = [
+        { option: 1, name: "Backpack 01", img: "/static/products/thumbs/bag-01.png" },
+        { option: 2, name: "Backpack 02", img: "/static/products/thumbs/bag-02.png" },
+      ];
+
+      const grid = document.getElementById("grid");
+      const form = document.getElementById("form");
+      const btn = document.getElementById("btn");
+      const status = document.getElementById("status");
+      const out = document.getElementById("out");
+      const outStatus = document.getElementById("outStatus");
+      const userImage = document.getElementById("userImage");
+      const seed = document.getElementById("seed");
+      const fixedSeed = document.getElementById("fixedSeed");
+
+      let selectedOption = PRODUCTS[0].option;
+
+      function randSeed() {
+        // 0..2147483647 inclusive
+        return Math.floor(Math.random() * 2147483648);
+      }
+
+      // seed on page load
+      seed.value = String(randSeed());
+
+      function renderOptions() {
+        grid.innerHTML = "";
+        PRODUCTS.forEach(p => {
+          const div = document.createElement("div");
+          div.className = "opt" + (p.option === selectedOption ? " selected" : "");
+          div.innerHTML = `
+            <img src="${p.img}" alt="${p.name}">
+            <div class="opt-body">
+              <div class="opt-title">${p.name}</div>
+              <div class="opt-sub">Switch Path = ${p.option}</div>
+            </div>
+          `;
+
+          div.onclick = () => {
+            selectedOption = p.option;
+            document.querySelectorAll(".opt").forEach(x => x.classList.remove("selected"));
+            div.classList.add("selected");
+          };
+
+          grid.appendChild(div);
+        });
+      }
+      renderOptions();
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+
+        const file = userImage.files && userImage.files[0];
+        if (!file) return alert("Please upload your photo.");
+
+        let seedToUse;
+        if (fixedSeed.checked) {
+          const v = parseInt(seed.value, 10);
+          if (!Number.isFinite(v) || v < 0 || v > 2147483647) {
+            return alert("Invalid seed. Must be 0…2147483647.");
+          }
+          seedToUse = String(v);
+        } else {
+          seedToUse = String(randSeed());
+          seed.value = seedToUse;
+        }
+
+        status.textContent = "Generating...";
+        btn.disabled = true;
+        out.style.display = "none";
+        outStatus.textContent = "Generating...";
+
+        try {
+          const fd = new FormData();
+          fd.append("userImage", file);
+          fd.append("productOption", String(selectedOption));
+          fd.append("seed", seedToUse);
+          fd.append("fixedSeed", fixedSeed.checked ? "true" : "false");
+
+          const res = await fetch("/api/generate", { method: "POST", body: fd });
+          const data = await res.json();
+
+          if (!res.ok) throw new Error(data.error || "Generation failed");
+          if (!data.imageUrl) throw new Error("No imageUrl returned");
+
+          out.src = data.imageUrl;
+          out.style.display = "block";
+          outStatus.textContent = "";
+          status.textContent = "Done ✅";
+
+          if (typeof data.seed !== "undefined") seed.value = String(data.seed);
+        } catch (err) {
+          console.error(err);
+          status.textContent = "Error: " + (err.message || String(err));
+          outStatus.textContent = "Generation failed.";
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+  </script>
+</body>
+</html>
