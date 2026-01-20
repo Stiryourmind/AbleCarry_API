@@ -80,13 +80,13 @@
   <div class="wrapper">
     <h1>HuLuBuLu Try-On</h1>
     <div class="subtitle">
-      Choose a backpack option (maps to workflow <code>Switch Path</code>), upload your photo, then generate.
+      Choose a bag option (maps to workflow <code>Switch Path</code>), upload your photo, then generate.
       <br/>Prompt is fixed (users can’t edit).
     </div>
 
     <div class="card">
       <form id="form">
-        <label>1) Choose backpack</label>
+        <label>1) Choose bag</label>
         <div class="grid" id="grid"></div>
 
         <label>2) Upload your photo</label>
@@ -117,8 +117,8 @@
     document.addEventListener("DOMContentLoaded", () => {
       // NOTE: thumbs are auto-generated during Render build
       const PRODUCTS = [
-        { option: 1, name: "Backpack 01", img: "/static/products/thumbs/bag-01.png" },
-        { option: 2, name: "Backpack 02", img: "/static/products/thumbs/bag-02.png" },
+        { option: 1, name: "Bag 01", img: "/static/products/thumbs/bag-01.png" },
+        { option: 2, name: "Bag 02", img: "/static/products/thumbs/bag-02.png" },
       ];
 
       const grid = document.getElementById("grid");
