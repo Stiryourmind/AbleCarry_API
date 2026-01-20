@@ -68,11 +68,10 @@ def healthz():
 
 # ---------------- HELPERS ----------------
 
-def bytes_to_dataurl(content: bytes, filename: str) -> str:
-    mime, _ = mimetypes.guess_type(filename)
-    mime = mime or "application/octet-stream"
-    b64 = base64.b64encode(content).decode("utf-8")
-    return f"data:{mime};base64,{b64}"
+def bytes_to_base64(content: bytes) -> str:
+    # raw base64 ONLY (no data: prefix)
+    return base64.b64encode(content).decode("ascii")
+
 
 
 def random_seed() -> int:
@@ -179,7 +178,16 @@ async def generate(
     if not content:
         return JSONResponse({"error": "Empty upload."}, status_code=400)
 
-    user_dataurl = bytes_to_dataurl(content, userImage.filename or "user.png")
+    user_b64 = bytes_to_base64(content)
+    
+    # safety: strip whitespace/newlines (shouldn't exist, but safe)
+    user_b64 = "".join(user_b64.split())
+
+    # safety: fix padding if any transport stripped it (rare but safe)
+    missing = len(user_b64) % 4
+    if missing:
+        user_b64 += "=" * (4 - missing)
+
 
     # Seed handling (clamped to 2147483647)
     seed_val = random_seed()
@@ -192,7 +200,7 @@ async def generate(
     try:
         node_info_list = [
             {"nodeId": PROMPT_NODE_ID, "fieldName": PROMPT_FIELD, "fieldValue": FIXED_PROMPT},
-            {"nodeId": USER_NODE_ID, "fieldName": USER_FIELD, "fieldValue": user_dataurl},
+            {"nodeId": USER_NODE_ID, "fieldName": USER_FIELD, "fieldValue": user_b64},
             {"nodeId": SWITCH_NODE_ID, "fieldName": SWITCH_FIELD, "fieldValue": str(opt)},
             {"nodeId": SEED_NODE_ID, "fieldName": SEED_FIELD, "fieldValue": str(seed_val)},
         ]
