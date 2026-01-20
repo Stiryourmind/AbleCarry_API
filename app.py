@@ -206,5 +206,17 @@ async def generate(
 
         return {"imageUrl": image_url, "seed": seed_val, "taskId": task_id}
 
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        except Exception as e:
+            print("ERROR /api/generate:", repr(e))
+            return JSONResponse({"error": str(e), "type": e.__class__.__name__}, status_code=500)
+
+from pathlib import Path
+
+@app.get("/debug/thumbs")
+def debug_thumbs():
+    p = Path("public/products/thumbs")
+    return {
+        "thumbs_dir_exists": p.exists(),
+        "files": [x.name for x in p.glob("*.png")] if p.exists() else []
+    }
+
