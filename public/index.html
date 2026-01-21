@@ -92,14 +92,6 @@
         <input id="userImage" type="file" accept="image/*" />
         <div class="hint">Best: clear shoulders visible, not too dark, simple background.</div>
 
-        <label>Seed</label>
-        <input id="seed" type="number" min="0" max="2147483647" step="1" />
-        <div class="inline">
-          <input id="fixedSeed" type="checkbox" />
-          <span>Use fixed seed (repeatable)</span>
-        </div>
-        <div class="hint">Seed must be within <code>0 … 2147483647</code>.</div>
-
         <button id="btn" type="submit">Generate</button>
         <div class="status" id="status"></div>
       </form>
@@ -127,18 +119,8 @@
       const out = document.getElementById("out");
       const outStatus = document.getElementById("outStatus");
       const userImage = document.getElementById("userImage");
-      const seed = document.getElementById("seed");
-      const fixedSeed = document.getElementById("fixedSeed");
 
       let selectedOption = PRODUCTS[0].option;
-
-      function randSeed() {
-        // 0..2147483647 inclusive
-        return Math.floor(Math.random() * 2147483648);
-      }
-
-      // seed on page load
-      seed.value = String(randSeed());
 
       function renderOptions() {
         grid.innerHTML = "";
@@ -170,18 +152,6 @@
         const file = userImage.files && userImage.files[0];
         if (!file) return alert("Please upload your photo.");
 
-        let seedToUse;
-        if (fixedSeed.checked) {
-          const v = parseInt(seed.value, 10);
-          if (!Number.isFinite(v) || v < 0 || v > 2147483647) {
-            return alert("Invalid seed. Must be 0…2147483647.");
-          }
-          seedToUse = String(v);
-        } else {
-          seedToUse = String(randSeed());
-          seed.value = seedToUse;
-        }
-
         status.textContent = "Generating...";
         btn.disabled = true;
         out.style.display = "none";
@@ -191,8 +161,6 @@
           const fd = new FormData();
           fd.append("userImage", file);
           fd.append("productOption", String(selectedOption));
-          fd.append("seed", seedToUse);
-          fd.append("fixedSeed", fixedSeed.checked ? "true" : "false");
 
           const res = await fetch("/api/generate", { method: "POST", body: fd });
           const data = await res.json();
@@ -204,8 +172,6 @@
           out.style.display = "block";
           outStatus.textContent = "";
           status.textContent = "Done ✅";
-
-          if (typeof data.seed !== "undefined") seed.value = String(data.seed);
         } catch (err) {
           console.error(err);
           status.textContent = "Error: " + (err.message || String(err));
