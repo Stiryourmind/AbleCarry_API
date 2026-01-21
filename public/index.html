@@ -10,11 +10,9 @@
     .wrapper { width: 100%; max-width: 980px; padding: 24px 16px 40px; }
     h1 { margin: 0 0 8px; font-size: 1.8rem; }
     .subtitle { margin: 0 0 18px; color: #a0a0a0; line-height: 1.35; }
-
     .card { background: #101010; border-radius: 12px; border: 1px solid #262626; padding: 16px 18px 20px; margin-bottom: 20px; }
     label { display:block; margin: 10px 0 8px; font-size: 0.95rem; color: #e0e0e0; }
-
-    input[type="file"], input[type="number"] {
+    input[type="file"] {
       width: 100%;
       padding: 10px 12px;
       border-radius: 10px;
@@ -23,7 +21,6 @@
       color: #fff;
       font-size: 0.95rem;
     }
-
     button {
       margin-top: 12px;
       padding: 10px 18px;
@@ -36,52 +33,29 @@
       font-size: 0.98rem;
     }
     button:disabled { opacity: .5; cursor: default; }
-
     .status { margin-top: 10px; font-size: .9rem; color: #bbb; min-height: 1.2em; }
 
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 6px; }
-    .opt {
-      border: 1px solid #2b2b2b;
-      border-radius: 14px;
-      background: #0c0c0c;
-      cursor:pointer;
-      overflow: hidden;
-      transition: transform 120ms ease, border-color 120ms ease, outline-color 120ms ease;
-    }
+    .opt { border: 1px solid #2b2b2b; border-radius: 14px; background: #0c0c0c; cursor:pointer; overflow: hidden;
+      transition: transform 120ms ease, border-color 120ms ease, outline-color 120ms ease; }
     .opt:hover { transform: translateY(-1px); }
     .opt.selected { outline: 2px solid #4f46e5; border-color: #4f46e5; }
 
-    .opt img {
-      height: 160px;
-      object-fit: contain;
-      padding: 12px;
-    }
+    .opt img { width: 100%; height: 160px; object-fit: contain; padding: 12px; display:block; background:#0b0b0b; }
     .opt-body { padding: 12px 12px 14px; }
     .opt-title { font-weight: 800; font-size: 1.02rem; }
     .opt-sub { color:#9a9a9a; margin-top: 6px; font-size: 0.88rem; }
 
-    .preview {
-      max-width: 100%;
-      max-height: 560px;
-      border-radius: 12px;
-      border: 1px solid #333;
-      display:none;
-      margin-top: 12px;
-      background:#0b0b0b;
-    }
+    .preview { max-width: 100%; max-height: 560px; border-radius: 12px; border: 1px solid #333; display:none;
+      margin-top: 12px; background:#0b0b0b; }
 
-    .inline { display:flex; align-items:center; gap:10px; margin-top: 10px; color:#e0e0e0; }
-    .inline input { width: 16px; height: 16px; }
     .hint { color:#7a7a7a; font-size:0.85rem; margin-top:6px; line-height:1.35; }
-    code { background:#0b0b0b; border:1px solid #222; padding:2px 6px; border-radius:8px; }
   </style>
 </head>
 <body>
   <div class="wrapper">
     <h1>Able Carry Try-On</h1>
-    <div class="subtitle">
-      Choose a bag and upload your photo, then generate.
-    </div>
+    <div class="subtitle">Choose a bag and upload your photo, then generate. Output will auto-download.</div>
 
     <div class="card">
       <form id="form">
@@ -106,7 +80,6 @@
 
   <script>
     document.addEventListener("DOMContentLoaded", () => {
-      // NOTE: thumbs are auto-generated during Render build
       const PRODUCTS = [
         { option: 1, name: "Bag 01", img: "/static/products/thumbs/bag-01.png" },
         { option: 2, name: "Bag 02", img: "/static/products/thumbs/bag-02.png" },
@@ -134,17 +107,24 @@
               <div class="opt-sub">Switch Path = ${p.option}</div>
             </div>
           `;
-
           div.onclick = () => {
             selectedOption = p.option;
             document.querySelectorAll(".opt").forEach(x => x.classList.remove("selected"));
             div.classList.add("selected");
           };
-
           grid.appendChild(div);
         });
       }
       renderOptions();
+
+      function triggerDownload(url, filenameHint) {
+        const a = document.createElement("a");
+        a.href = url;
+        if (filenameHint) a.download = filenameHint; // works because it's our domain response
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
 
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
@@ -164,14 +144,28 @@
 
           const res = await fetch("/api/generate", { method: "POST", body: fd });
           const data = await res.json();
-
           if (!res.ok) throw new Error(data.error || "Generation failed");
-          if (!data.imageUrl) throw new Error("No imageUrl returned");
 
-          out.src = data.imageUrl;
+          // imageUrl is now a download endpoint on our domain
+          // It returns Content-Disposition attachment and streams the file.
+          const downloadUrl = data.imageUrl;
+
+          // Preview (same url works; browser will still download if opened directly,
+          // so we fetch as blob for preview):
+          const blobRes = await fetch(downloadUrl);
+          const blob = await blobRes.blob();
+          const objectUrl = URL.createObjectURL(blob);
+
+          out.src = objectUrl;
           out.style.display = "block";
           outStatus.textContent = "";
-          status.textContent = "Done ✅";
+          status.textContent = "Done ✅ (downloading...)";
+
+          // Auto-download (use real URL so filename from Content-Disposition is used)
+          triggerDownload(downloadUrl);
+
+          // Clean status
+          setTimeout(() => { status.textContent = "Done ✅"; }, 800);
         } catch (err) {
           console.error(err);
           status.textContent = "Error: " + (err.message || String(err));
