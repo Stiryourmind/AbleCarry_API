@@ -33,7 +33,7 @@ PROMPT_FIELD = os.getenv("RUNNINGHUB_PROMPT_FIELD_NAME", "text")
 SEED_NODE_ID = os.getenv("RUNNINGHUB_SEED_NODE_ID", "50")
 SEED_FIELD = os.getenv("RUNNINGHUB_SEED_FIELD_NAME", "seed")
 
-FIXED_PROMPT = "圖中的人背著背包在身後"
+FIXED_PROMPT = "圖一的人背著袋以圖三的姿勢垂直飄浮在空中, 雙手垂放在身旁,雙腳離地垂下,背景是灰色空間, 地下有飄浮陰影, 保持圖一人物的樣貌和衣著不變。"
 MAX_SEED = 2147483647
 
 ARCHIVE_TOKEN = os.getenv("ARCHIVE_TOKEN", "")
