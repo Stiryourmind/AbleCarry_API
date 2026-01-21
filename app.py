@@ -1,13 +1,18 @@
 import os
 import time
+import json
 import base64
-import mimetypes
 import secrets
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import JSONResponse, FileResponse
+import mimetypes
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from typing import Optional
+
+import requests
+from fastapi import FastAPI, UploadFile, File, Form, Query
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-import requests
 
 # ---------------- CONFIG ----------------
 
@@ -16,27 +21,28 @@ BASE_URL = "https://www.runninghub.ai"
 RUNNINGHUB_API_KEY = os.getenv("RUNNINGHUB_API_KEY")
 WORKFLOW_ID = (os.getenv("RUNNINGHUB_WORKFLOW_ID") or "").split("?")[0]
 
-# User image node (LoadImageFromBase64)
 USER_NODE_ID = os.getenv("RUNNINGHUB_USER_NODE_ID", "97")
 USER_FIELD = os.getenv("RUNNINGHUB_USER_FIELD_NAME", "data")
 
-# Product selector node (Switch)
 SWITCH_NODE_ID = os.getenv("RUNNINGHUB_SWITCH_NODE_ID", "101")
 SWITCH_FIELD = os.getenv("RUNNINGHUB_SWITCH_FIELD_NAME", "Path")
 
-# Prompt node (Text)
 PROMPT_NODE_ID = os.getenv("RUNNINGHUB_PROMPT_NODE_ID", "86")
 PROMPT_FIELD = os.getenv("RUNNINGHUB_PROMPT_FIELD_NAME", "text")
 
-# Seed node (RH_Nano_Banana_Image2Image)
 SEED_NODE_ID = os.getenv("RUNNINGHUB_SEED_NODE_ID", "50")
 SEED_FIELD = os.getenv("RUNNINGHUB_SEED_FIELD_NAME", "seed")
 
-# Fixed prompt (user cannot edit)
 FIXED_PROMPT = "圖中的人背著背包在身後"
-
-# Seed max per RunningHub validation (2^31 - 1)
 MAX_SEED = 2147483647
+
+ARCHIVE_TOKEN = os.getenv("ARCHIVE_TOKEN", "")
+ARCHIVE_RETENTION_DAYS = os.getenv("ARCHIVE_RETENTION_DAYS", "").strip()
+
+ARCHIVE_DIR = Path("archives")
+ARCHIVE_INPUT_DIR = ARCHIVE_DIR / "input"
+ARCHIVE_OUTPUT_DIR = ARCHIVE_DIR / "output"
+ARCHIVE_LOG = ARCHIVE_DIR / "archives.jsonl"
 
 if not RUNNINGHUB_API_KEY or not WORKFLOW_ID:
     raise RuntimeError("Missing RUNNINGHUB_API_KEY or RUNNINGHUB_WORKFLOW_ID")
@@ -44,7 +50,6 @@ if not RUNNINGHUB_API_KEY or not WORKFLOW_ID:
 # ---------------- APP ----------------
 
 app = FastAPI()
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # tighten later if needed
@@ -52,40 +57,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve public/ under /static (prevents API routes getting intercepted)
 app.mount("/static", StaticFiles(directory="public"), name="static")
-
 
 @app.get("/")
 def home():
     return FileResponse("public/index.html")
 
-
 @app.get("/healthz")
 def healthz():
     return "ok"
 
+# ---------------- Helpers ----------------
 
-# ---------------- HELPERS ----------------
-
-def bytes_to_base64(content: bytes) -> str:
-    # raw base64 ONLY (no data: prefix)
-    return base64.b64encode(content).decode("ascii")
-
-
+def utc_stamp():
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 def random_seed() -> int:
-    # secure random seed in [0..MAX_SEED]
     return secrets.randbelow(MAX_SEED + 1)
 
-
-def clamp_seed(val: int) -> int:
-    if val < 0:
-        return 0
-    if val > MAX_SEED:
-        return MAX_SEED
-    return val
-
+def bytes_to_base64(content: bytes) -> str:
+    return base64.b64encode(content).decode("ascii")
 
 def rh_post(endpoint: str, payload: dict):
     r = requests.post(
@@ -97,20 +88,15 @@ def rh_post(endpoint: str, payload: dict):
     r.raise_for_status()
     return r.json()
 
-
 def create_task(node_info_list):
-    resp = rh_post(
-        "/task/openapi/create",
-        {
-            "apiKey": RUNNINGHUB_API_KEY,
-            "workflowId": WORKFLOW_ID,
-            "nodeInfoList": node_info_list,
-            "addMetadata": True,
-            "instanceType": "plus",
-            "usePersonalQueue": "true",
-        },
-    )
-
+    resp = rh_post("/task/openapi/create", {
+        "apiKey": RUNNINGHUB_API_KEY,
+        "workflowId": WORKFLOW_ID,
+        "nodeInfoList": node_info_list,
+        "addMetadata": True,
+        "instanceType": "plus",
+        "usePersonalQueue": "true",
+    })
     if resp.get("code") != 0:
         raise RuntimeError(f"Create error: {resp}")
 
@@ -119,23 +105,15 @@ def create_task(node_info_list):
         raise RuntimeError(f"Create succeeded but no taskId: {resp}")
     return str(task_id)
 
-
 def poll_outputs(task_id: str, timeout_sec: int = 300, interval_sec: int = 3):
     start = time.time()
     while time.time() - start < timeout_sec:
-        resp = rh_post(
-            "/task/openapi/outputs",
-            {
-                "apiKey": RUNNINGHUB_API_KEY,
-                "taskId": task_id,
-            },
-        )
-
+        resp = rh_post("/task/openapi/outputs", {"apiKey": RUNNINGHUB_API_KEY, "taskId": task_id})
         code = resp.get("code")
 
         if code == 0:
             data = resp.get("data", [])
-            if isinstance(data, list) and len(data) > 0:
+            if isinstance(data, list) and data:
                 return data
             if isinstance(data, dict) and isinstance(data.get("outputs"), list) and data["outputs"]:
                 return data["outputs"]
@@ -149,53 +127,86 @@ def poll_outputs(task_id: str, timeout_sec: int = 300, interval_sec: int = 3):
 
     raise TimeoutError("RunningHub timeout")
 
-
 def pick_image_url(outputs):
     first = outputs[0] if outputs else {}
     return first.get("fileUrl") or first.get("imageUrl") or first.get("url") or first.get("image_url")
 
+def require_token(token: str):
+    if not ARCHIVE_TOKEN:
+        # If you didn't set ARCHIVE_TOKEN, we still block listing/downloading.
+        raise RuntimeError("ARCHIVE_TOKEN is not configured on server.")
+    if token != ARCHIVE_TOKEN:
+        raise RuntimeError("Invalid token.")
+
+def ensure_archive_dirs():
+    ARCHIVE_INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    ARCHIVE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+
+def safe_ext_from_mime(mime: str) -> str:
+    ext = mimetypes.guess_extension(mime or "")
+    if ext in (".jpg", ".jpeg", ".png", ".webp"):
+        return ext
+    return ".bin"
+
+def cleanup_old_archives():
+    """Optional retention cleanup (best-effort)."""
+    if not ARCHIVE_RETENTION_DAYS:
+        return
+    try:
+        days = int(ARCHIVE_RETENTION_DAYS)
+        if days <= 0:
+            return
+    except:
+        return
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # Delete files older than cutoff based on filename timestamp prefix.
+    # Our filenames start with UTC stamp: YYYYMMDDTHHMMSSZ_...
+    for folder in [ARCHIVE_INPUT_DIR, ARCHIVE_OUTPUT_DIR]:
+        for p in folder.glob("*"):
+            try:
+                stamp = p.name.split("_", 1)[0]
+                dt = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+                if dt < cutoff:
+                    p.unlink(missing_ok=True)
+            except:
+                continue
+
+    # Compact log is not handled here; leaving it as audit trail.
 
 # ---------------- API ----------------
 
 @app.post("/api/generate")
 async def generate(
     userImage: UploadFile = File(...),
-    productOption: str = Form(...),  # "1" or "2" for now
-    seed: str = Form(None),
-    fixedSeed: str = Form("false"),
+    productOption: str = Form(...),  # "1" or "2"
 ):
-    # Validate product option (matches Switch inputs)
+    ensure_archive_dirs()
+    cleanup_old_archives()
+
+    # validate option
     try:
         opt = int(productOption)
     except:
         return JSONResponse({"error": "productOption must be a number (e.g. 1 or 2)."}, status_code=400)
+    if opt < 1:
+        return JSONResponse({"error": "productOption must be >= 1."}, status_code=400)
 
-    if opt not in (1, 2):
-        return JSONResponse({"error": "productOption must be 1 or 2 (for now)."}, status_code=400)
-
-    # Read uploaded file
-    content = await userImage.read()
-    if not content:
+    # read input image
+    input_bytes = await userImage.read()
+    if not input_bytes:
         return JSONResponse({"error": "Empty upload."}, status_code=400)
 
-    user_b64 = bytes_to_base64(content)
-    
-    # safety: strip whitespace/newlines (shouldn't exist, but safe)
+    # base64 for LoadImageFromBase64 node (raw base64 only)
+    user_b64 = bytes_to_base64(input_bytes)
     user_b64 = "".join(user_b64.split())
-
-    # safety: fix padding if any transport stripped it (rare but safe)
     missing = len(user_b64) % 4
     if missing:
         user_b64 += "=" * (4 - missing)
 
-
-    # Seed handling (clamped to 2147483647)
     seed_val = random_seed()
-    if fixedSeed == "true":
-        try:
-            seed_val = clamp_seed(int(seed))
-        except:
-            return JSONResponse({"error": "Invalid seed. Must be an integer."}, status_code=400)
 
     try:
         node_info_list = [
@@ -207,25 +218,135 @@ async def generate(
 
         task_id = create_task(node_info_list)
         outputs = poll_outputs(task_id)
-        image_url = pick_image_url(outputs)
-
-        if not image_url:
+        output_url = pick_image_url(outputs)
+        if not output_url:
             raise RuntimeError(f"No imageUrl found in outputs: {outputs}")
 
-        return {"imageUrl": image_url, "seed": seed_val, "taskId": task_id}
+        # Download output image bytes so we can (a) archive it (b) serve it from our domain for reliable download
+        out_resp = requests.get(output_url, timeout=120)
+        out_resp.raise_for_status()
+        output_bytes = out_resp.content
+
+        # -------- Archive files on Render disk --------
+        ts = utc_stamp()
+        bag_label = f"bag-{opt:02d}"
+
+        in_mime = userImage.content_type or "application/octet-stream"
+        in_ext = safe_ext_from_mime(in_mime)
+        input_filename = f"{ts}_{bag_label}_task_{task_id}_input{in_ext}"
+        output_filename = f"{ts}_{bag_label}_task_{task_id}_output.png"
+
+        input_path = ARCHIVE_INPUT_DIR / input_filename
+        output_path = ARCHIVE_OUTPUT_DIR / output_filename
+
+        input_path.write_bytes(input_bytes)
+        output_path.write_bytes(output_bytes)
+
+        archive_id = f"{ts}_{bag_label}_task_{task_id}"
+
+        # Write log entry (JSONL)
+        record = {
+            "id": archive_id,
+            "ts": ts,
+            "taskId": task_id,
+            "productOption": opt,
+            "input": {
+                "filename": input_filename,
+                "mime": in_mime,
+                "size": len(input_bytes),
+            },
+            "output": {
+                "filename": output_filename,
+                "mime": "image/png",
+                "size": len(output_bytes),
+                "runninghubUrl": output_url,
+            },
+        }
+        with ARCHIVE_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        # Important:
+        # Return output download URL served from OUR domain (reliable download attribute)
+        return {
+            "taskId": task_id,
+            "seed": seed_val,
+            "archiveId": archive_id,
+            "imageUrl": f"/api/archive/download/{archive_id}?token={ARCHIVE_TOKEN}&kind=output",
+            "inputDownloadUrl": f"/api/archive/download/{archive_id}?token={ARCHIVE_TOKEN}&kind=input",
+        }
 
     except Exception as e:
         print("ERROR /api/generate:", repr(e))
         return JSONResponse({"error": str(e), "type": e.__class__.__name__}, status_code=500)
 
+# -------- Archive APIs (protected by token) --------
 
-from pathlib import Path
+@app.get("/api/archive/list")
+def archive_list(
+    token: str = Query(""),
+    since: Optional[str] = Query(None),  # optional ISO-ish stamp filter
+    limit: int = Query(50, ge=1, le=500),
+):
+    try:
+        require_token(token)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=401)
 
-@app.get("/debug/thumbs")
-def debug_thumbs():
-    p = Path("public/products/thumbs")
-    return {
-        "thumbs_dir_exists": p.exists(),
-        "files": [x.name for x in p.glob("*.png")] if p.exists() else []
-    }
+    if not ARCHIVE_LOG.exists():
+        return {"items": []}
 
+    items = []
+    with ARCHIVE_LOG.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except:
+                continue
+            if since and rec.get("ts", "") <= since:
+                continue
+            items.append(rec)
+
+    # newest last in file; return last N
+    items = items[-limit:]
+    return {"items": items}
+
+@app.get("/api/archive/download/{archive_id}")
+def archive_download(
+    archive_id: str,
+    token: str = Query(""),
+    kind: str = Query("output"),  # input|output
+):
+    try:
+        require_token(token)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=401)
+
+    ensure_archive_dirs()
+
+    if kind not in ("input", "output"):
+        return JSONResponse({"error": "kind must be input or output"}, status_code=400)
+
+    # Find file by scanning the folders with prefix = archive_id
+    folder = ARCHIVE_INPUT_DIR if kind == "input" else ARCHIVE_OUTPUT_DIR
+    matches = list(folder.glob(f"{archive_id}_*"))
+    if not matches:
+        return JSONResponse({"error": "File not found"}, status_code=404)
+
+    path = matches[0]
+    mime = "application/octet-stream"
+    if kind == "output":
+        mime = "image/png"
+
+    def iterfile():
+        with path.open("rb") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+
+    headers = {"Content-Disposition": f'attachment; filename="{path.name}"'}
+    return StreamingResponse(iterfile(), media_type=mime, headers=headers)
