@@ -37,3 +37,11 @@ services:
         value: "50"
       - key: RUNNINGHUB_SEED_FIELD_NAME
         value: "seed"
+        
+      # -------- Archive system (Option 2B) --------
+      - key: ARCHIVE_TOKEN
+        sync: false
+
+      # Optional (cleanup old files on Render)
+      # - key: ARCHIVE_RETENTION_DAYS
+      #   value: "7"
